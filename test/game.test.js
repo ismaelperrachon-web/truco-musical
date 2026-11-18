@@ -45,6 +45,9 @@ test('envido encadenado, real y rechazo de una subida', () => {
 test('empate de envido a favor de mano', () => {
   const room = game(2, [[c(7), c(5, 'baquetas'), c(10, 'notas')], [c(7, 'baquetas'), c(6, 'notas'), c(12)]]);
   act(room, 0, 'envido'); act(room, 1, 'accept'); assert.deepEqual(room.scores, [2,0]);
+  const result=snapshot(room,1).round.sideResults[0];
+  assert.equal(result.winnerSeat,0); assert.equal(result.tied,true); assert.equal(result.points,2);
+  assert.deepEqual(result.entries.map(e=>e.value),[7,7]);
 });
 test('envido tiene prioridad y el truco pendiente reaparece', () => {
   const room = game(); act(room, 0, 'truco'); act(room, 1, 'envido'); act(room, 0, 'accept');
@@ -55,8 +58,65 @@ test('falta envido gana en malas y calcula distancia del líder en buenas', () =
   const hands = [[c(7),c(6),c(1,'baquetas')], [c(5,'baquetas'),c(3,'notas'),c(10)]];
   let room = game(2,hands); room.scores = [14,13]; act(room, 0, 'falta'); act(room, 1, 'accept');
   assert.equal(room.phase, 'finished'); assert.equal(room.winner, 0); assert.equal(room.scores[0], 30);
+  assert.equal(room.round.sideResults[0].points,16); assert.equal(room.round.sideResults[0].matchWon,true);
   room = game(2,hands); room.scores = [23,14]; act(room, 0, 'falta'); act(room, 1, 'accept');
   assert.deepEqual(room.scores, [30,14]);
+});
+
+test('la combinación corregida habilita Flor obligatoria y publica sus 37 tantos', () => {
+  const room=game(2,[[c(4,'microfonos'),c(6),c(2)], [c(7,'baquetas'),c(6,'notas'),c(12)]]);
+  assert.deepEqual(actionsFor(room,0),['flor']);
+  assert.equal(snapshot(room,0).round.flor,37);
+  assert.equal(snapshot(room,1).round.flor,null);
+  act(room,0,'flor');
+  assert.deepEqual(room.scores,[3,0]);
+  const result=room.round.sideResults[0];
+  assert.deepEqual(result.entries.map(e=>e.value),[37,null]);
+  assert.equal(result.winnerSeat,0); assert.equal(result.points,3);
+  assert.equal(room.events.at(-2).label,'Flor'); assert.equal(room.events.at(-1).type,'result');
+});
+
+test('contraflor querida muestra puntos, ganador y 6 puntos otorgados', () => {
+  const room=game(2,[[c(4,'microfonos'),c(6),c(2)], [c(7,'baquetas'),c(6,'baquetas'),c(5,'baquetas')]]);
+  act(room,0,'flor');act(room,1,'flor');act(room,1,'contra');act(room,0,'accept');
+  const result=room.round.sideResults[0];
+  assert.deepEqual(result.entries.map(e=>e.value),[37,38]);
+  assert.equal(result.winnerSeat,1);assert.equal(result.points,6);assert.equal(result.tied,false);
+  assert.equal(room.events.at(-2).label,'Quiero');
+  const {id,...saved}=result; assert.equal(room.events.at(-1).id,id); assert.deepEqual(room.events.at(-1).result,saved);
+  assert.equal(room.events.at(-1).result.points,room.scores[1]);
+});
+
+test('eventos públicos identifican cartas y cantos sin exponer manos ni duplicar IDs', () => {
+  const room=game();
+  const before=room.events.length;
+  act(room,0,'truco');act(room,1,'retruco');act(room,0,'cuatro');act(room,1,'accept');
+  assert.deepEqual(room.events.slice(before).map(e=>e.label),['Truco','Retruco','Vale cuatro','Quiero']);
+  act(room,0,'play',c(1).id);
+  const event=room.events.at(-1);
+  assert.equal(event.type,'card');assert.equal(event.nickname,'Ana');assert.equal(event.card.id,c(1).id);
+  assert.equal(room.round.table[0].eventId,event.id);
+  const json=JSON.stringify(snapshot(room,1).events);
+  for(const card of room.round.hands[0]) assert.ok(!json.includes(JSON.stringify(card.id)));
+  assert.equal(new Set(room.events.map(e=>e.id)).size,room.events.length);
+  act(room,1,'fold');assert.equal(room.events.at(-1).label,'Me voy al mazo');
+});
+
+test('envido no querido anuncia rechazo sin revelar tantos', () => {
+  const room=game();act(room,0,'real');act(room,1,'decline');
+  assert.deepEqual(room.events.slice(-2).map(e=>e.label),['Real envido','No quiero']);
+  assert.equal(room.round.sideResults.length,0);
+  assert.ok(room.events.every(e=>e.type!=='result'));
+});
+
+test('empate 2v2: todos los tantos y prioridad circular desde mano', () => {
+  const room=game(4,[[c(7),c(1,'baquetas'),c(10,'notas')], [c(6),c(1,'notas'),c(10,'baquetas')], [c(7,'baquetas'),c(1),c(12,'notas')], [c(7,'notas'),c(2,'baquetas'),c(11)]]);
+  room.mano=2;room.round.turn=2;room.round.leader=2;
+  act(room,2,'envido');act(room,3,'accept');
+  const result=room.round.sideResults[0];
+  assert.deepEqual(result.entries.map(e=>e.value),[7,6,7,7]);
+  assert.equal(result.winnerSeat,2);assert.equal(result.mano,2);assert.equal(result.tied,true);
+  assert.deepEqual(snapshot(room,0).events,snapshot(room,3).events);
 });
 test('flor obligatoria, simple, contraflor y resto', () => {
   const hands = [[c(7),c(6),c(1)], [c(7,'baquetas'),c(6,'notas'),c(12)]];

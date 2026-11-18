@@ -23,7 +23,11 @@ Abrí **http://localhost:5173**. Un solo proceso sirve React, la API y Socket.io
 
 Para probar dos jugadores en una computadora, abrí dos pestañas independientes e ingresá en ambas. **Recargar la misma pestaña recupera su asiento** mediante un token aleatorio en `sessionStorage`. Al perder conexión, se pausa la mesa hasta que vuelvan todos. El botón de salir concede la partida al equipo contrario si estaba en juego. Cerrar o recargar la pestaña solamente desconecta; no abandona.
 
-El sonido está apagado inicialmente. Activá el ícono del parlante: Web Audio sintetiza los efectos al repartir, jugar y cantar, sin archivos externos.
+Los efectos están habilitados y se desbloquean con la primera interacción, según las restricciones de audio del navegador. El parlante permite silenciarlos. Cada carta produce un roce y un golpe sintetizados sobre el paño; también hay efectos al repartir, cantar y resolver tantos.
+
+El control **Cumbia** de la esquina superior prende o apaga una base instrumental chill sintetizada con Web Audio a 84 BPM: bajo suave, guacharaca, congas y melodía cálida con armónicos de acordeón. Empieza apagada, al 30% de volumen. Su deslizador funciona de manera independiente: bajar o apagar la música no corta los efectos, y silenciar las cartas no corta la música. No requiere archivos MP3, descargas ni servicios externos.
+
+Los cantos y cartas aparecen en grande durante **2,5 segundos**, en orden para todos los jugadores. La carta se destaca antes de incorporarse a la mesa. Los controles de juego esperan a que terminen los anuncios; los controles de audio siguen disponibles. Al aceptar envido o flor, el resultado muestra los tantos de cada jugador, quién ganó, si hubo desempate por prioridad de mano y cuántos puntos se otorgaron. Dura **6,5 segundos**, puede cerrarse con «Seguir jugando» y puede volver a abrirse desde **Ver resultado** durante esa ronda. Las personas sin flor se indican con «Sin flor». Al recargar se conserva el resultado y no se repiten los carteles antiguos.
 
 ## Producción local
 
@@ -61,8 +65,8 @@ El mismo build/start puede ejecutarse como servicio Node en otros proveedores. E
 - Jerarquía completa, pardas, mejor de tres y prioridad de mano. En parejas se compara el mejor integrante; los empates se resuelven por orden circular desde mano.
 - Partidas a 30, truco/retruco/vale cuatro, derechos alternados de subida y pagos al rechazar.
 - Envido durante la primera baza, incluso como respuesta previa a un truco pendiente. Hasta dos envidos, luego un real y finalmente una falta; después de real no se vuelve a envido. La falta **reemplaza** lo acumulado: gana la partida si ambos van en malas; en buenas vale la distancia del líder hasta 30. Rechazar una subida paga el acumulado anterior; un primer canto rechazado paga 1.
-- La flor se calcula con los **tres casos del pedido**: tres del mismo palo o al menos dos piezas. Una pieza más dos cartas del mismo palo distinto al de la pieza **no** forma flor en esta variante.
-- **Convención de flor confirmada:** tres del mismo palo con una sola pieza suman el valor de la pieza y las otras dos cartas, **sin otros 20**. Con dos o tres piezas, se toma la mayor entera y las demás menos 20. Sin piezas, suma nominal + 20.
+- Hay flor con tres cartas del mismo palo, dos o tres piezas, **o una pieza y otras dos cartas del mismo palo entre sí**, aunque ese palo sea distinto al de la muestra.
+- Con una sola pieza se suma su valor y el nominal de las otras dos cartas, **sin otros 20**; las figuras comunes valen 0. Ejemplo: pieza del 4 (29) + 6 y 2 de guitarras = **37 de flor**. El rey que sustituye una pieza sigue la misma regla. Con dos o tres piezas, se toma la mayor entera y las demás menos 20. Sin piezas, suma nominal + 20.
 - Para evitar cobrar envido antes de una flor obligatoria de un compañero, todas las flores se anuncian **al inicio de la ronda**. Quienes no tienen flor esperan. Si ambos equipos tienen, se habilitan aceptación por 3, contraflor por 6 y contraflor al resto por la partida. Rechazar contraflor o resto paga 4.
 - Flor simple o flor y flor sin subir dan **3 al ganador**, según el pedido; no se acumulan 3 por cada flor de un mismo equipo.
 - Las cartas jugadas son públicas. Al aceptar envido o flor se publican los tantos declarados, **no las cartas sin jugar**. Cada jugador ve únicamente su propia mano y sus propios tantos.
@@ -76,16 +80,21 @@ npm test
 npm run build
 ```
 
-Las pruebas cubren jerarquía, sustitución del rey, envido y flor, todas las combinaciones relevantes de pardas, validación de turnos/cartas, pagos y cadenas de cantos, prioridad envido/truco, privacidad de las vistas, pausa por desconexión, reparto 2v2 y partidas completas simuladas. Una prueba de integración abre un servidor efímero y clientes Socket.io reales para verificar creación, ingreso, rechazo de intrusos, privacidad y reconexión.
+Las pruebas cubren jerarquía, sustitución del rey, la flor de una pieza y dos del mismo palo en los cuatro palos, figuras comunes, pardas, turnos/cartas, pagos y cadenas de cantos, prioridad envido/truco, resultados y desempates, privacidad de las vistas, pausa por desconexión, reparto 2v2 y partidas completas simuladas. Las pruebas de integración abren servidores efímeros y clientes Socket.io reales para verificar creación, ingreso, rechazo de intrusos, reconexión y entrega del mismo resultado de contraflor a ambos jugadores. También se verifican la deduplicación de anuncios y la independencia de los canales de audio con un contexto simulado.
 
 ## Estructura
 
 ```text
 truco-musical/
 ├── src/
-│   ├── main.jsx            # Portada, salas, mesa, tanteador y reglas
+│   ├── main.jsx            # Entrada React y estilos
+│   ├── App.jsx             # Portada, salas, mesa, tanteador y reglas
 │   ├── cards.jsx           # Cartas e íconos SVG musicales
 │   ├── sound.js            # Efectos con Web Audio
+│   ├── AudioControls.jsx   # Música y efectos con controles independientes
+│   ├── announcements.jsx   # Carteles, animación de cartas y resultados
+│   ├── tableEvents.js      # Cursor y deduplicación de eventos públicos
+│   ├── table-feedback.css  # Estilos de carteles y controles de audio
 │   └── styles.css          # Tailwind y diseño adaptable
 ├── server/
 │   ├── rules.js            # Funciones puras de reglas y barajado
@@ -95,7 +104,9 @@ truco-musical/
 ├── test/
 │   ├── rules.test.js
 │   ├── game.test.js
-│   └── network.test.js
+│   ├── network.test.js
+│   ├── table-events.test.js
+│   └── sound.test.js
 ├── index.html
 ├── vite.config.js
 ├── render.yaml

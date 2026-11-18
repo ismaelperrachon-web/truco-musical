@@ -33,6 +33,10 @@ export function flor(hand, sample) {
   const pieces = hand.filter(c => piece(c, sample));
   const values = pieces.map(c => VALUES[piece(c, sample)]).sort((a, b) => b - a);
   if (pieces.length >= 2) return values[0] + values.slice(1).reduce((sum, v) => sum + v - 20, 0) + hand.filter(c => !piece(c, sample)).reduce((sum, c) => sum + commonValue(c), 0);
+  const ordinaryCards = hand.filter(c => !piece(c, sample));
+  if (pieces.length === 1 && ordinaryCards.length === 2 && ordinaryCards[0].suit === ordinaryCards[1].suit) {
+    return values[0] + ordinaryCards.reduce((sum, c) => sum + commonValue(c), 0);
+  }
   if (hand.every(c => c.suit === hand[0].suit)) {
     const ordinary = hand.filter(c => !piece(c, sample)).reduce((sum, c) => sum + commonValue(c), 0);
     return pieces.length ? values[0] + ordinary : 20 + ordinary;

@@ -75,3 +75,37 @@ test('cuatro clientes juegan una ronda 2v2 con vistas privadas sincronizadas', {
   assert.equal(room.phase,'between'); assert.equal(played.size,4);
   assert.ok(room.scores.some(n=>n>0));
 });
+
+test('flor corregida y resultados de contraflor llegan iguales a ambos jugadores', {timeout:15000}, async t=>{
+  const server=await createGameServer();
+  await new Promise(resolve=>server.http.listen(0,'127.0.0.1',resolve));
+  const url=`http://127.0.0.1:${server.http.address().port}`, clients=[];
+  t.after(async()=>{clients.forEach(c=>c.disconnect());await server.close();});
+  for(let i=0;i<2;i++) {
+    const client=connect(url,{forceNew:true,transports:['websocket'],reconnection:false});
+    clients.push(client);await once(client,'connect');
+  }
+  const host=await clients[0].emitWithAck('create',{nickname:'Ana',capacity:2});
+  await clients[1].emitWithAck('join',{nickname:'Luis',code:host.code});
+  const room=server.rooms.get(host.code);
+  await clients[0].emitWithAck('action',{action:'start',revision:room.revision});
+  // Reparto controlado en el servidor de prueba, sin rutas de debug en producción.
+  const card=(number,suit)=>({id:`${suit}-${number}`,number,suit});
+  room.round.sample=card(7,'microfonos');
+  room.round.hands=[[card(4,'microfonos'),card(6,'guitarras'),card(2,'guitarras')],[card(7,'baquetas'),card(6,'baquetas'),card(5,'baquetas')]];
+  room.round.original=structuredClone(room.round.hands);
+  for(const [seat,action] of [[0,'flor'],[1,'flor'],[1,'contra']]) {
+    const result=await clients[seat].emitWithAck('action',{action,revision:room.revision});assert.equal(result.ok,true);
+  }
+  const updates=clients.map(client=>once(client,'state'));
+  assert.equal((await clients[0].emitWithAck('action',{action:'accept',revision:room.revision})).ok,true);
+  const [a,b]=(await Promise.all(updates)).map(([view])=>view);
+  assert.deepEqual(a.round.sideResults,b.round.sideResults);
+  const result=a.round.sideResults[0];
+  assert.deepEqual(result.entries.map(e=>e.value),[37,38]);
+  assert.equal(result.winnerSeat,1);assert.equal(result.points,6);assert.equal(result.label,'Contraflor');
+  assert.deepEqual(a.events,b.events);
+  assert.deepEqual(a.events.slice(-2).map(e=>e.type),['call','result']);
+  const publicJson=JSON.stringify(a.events);
+  for(const card of room.round.hands.flat()) assert.ok(!publicJson.includes(JSON.stringify(card.id)));
+});

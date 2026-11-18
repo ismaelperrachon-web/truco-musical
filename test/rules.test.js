@@ -32,15 +32,28 @@ test('envido: una pieza, dos del palo, tres palos y figuras', () => {
   assert.equal(envido([c(7), c(6, 'baquetas'), c(12, 'microfonos')], sample), 7);
   assert.equal(envido([c(12, 'notas'), c(6), c(1, 'baquetas')], c(2, 'notas')), 36);
 });
-test('flor: los tres casos, rey sustituto y convención confirmada con una pieza', () => {
+test('flor: palos, piezas, rey sustituto y una pieza más dos del mismo palo', () => {
   const sample = c(6, 'notas');
   assert.equal(flor([c(7), c(6), c(1)], sample), 34);
   assert.equal(flor([c(2, 'notas'), c(5, 'notas'), c(6)], sample), 44);
   assert.equal(flor([c(2, 'notas'), c(4, 'notas'), c(5, 'notas')], sample), 47);
   assert.equal(flor([c(2, 'notas'), c(7, 'notas'), c(1, 'notas')], sample), 38);
   assert.equal(flor([c(12, 'notas'), c(4, 'notas'), c(6)], c(2, 'notas')), 45);
-  assert.equal(flor([c(2, 'notas'), c(7), c(6)], sample), null);
+  assert.equal(flor([c(2, 'notas'), c(7), c(6)], sample), 43);
   assert.equal(flor([c(7), c(6, 'baquetas'), c(1, 'microfonos')], sample), null);
+});
+test('flor de una pieza y dos de otro palo: 37 puntos, figuras cero y rey sustituto', () => {
+  assert.equal(flor([c(4,'microfonos'),c(6),c(2)], c(7,'microfonos')),37);
+  assert.equal(flor([c(4,'microfonos'),c(10),c(12)], c(7,'microfonos')),29);
+  assert.equal(flor([c(12,'microfonos'),c(6),c(2)], c(4,'microfonos')),37);
+  assert.equal(flor([c(4,'microfonos'),c(6),c(2,'baquetas')], c(7,'microfonos')),null);
+  for (const suit of ['guitarras','baquetas','notas','microfonos']) {
+    for (const other of ['guitarras','baquetas','notas','microfonos'].filter(s=>s!==suit)) {
+      for (const [number,value] of [[2,30],[4,29],[5,28],[11,27],[10,27]]) {
+        assert.equal(flor([c(number,suit),c(6,other),c(2,other)],c(7,suit)),value+8);
+      }
+    }
+  }
 });
 test('resolución de bazas: todas las combinaciones de pardas', () => {
   const cases = [ [[0], undefined], [[null], undefined], [[0,0],0], [[1,1],1], [[null,0],0], [[null,1],1], [[0,null],0], [[1,null],1], [[0,1],undefined], [[null,null],undefined], [[0,1,0],0], [[0,1,1],1], [[0,1,null],0], [[1,0,null],1], [[null,null,1],1], [[null,null,null],0] ];
