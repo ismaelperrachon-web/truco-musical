@@ -1,0 +1,27 @@
+import { useState } from 'react';
+import { Users, Eye, Bot, UserPlus, Search, Radio } from 'lucide-react';
+
+const statuses = { available: 'Disponible para jugar', waiting: 'Esperando en su mesa', playing: 'En una partida', watching: 'Mirando una mesa', private: 'En una mesa privada' };
+const phases = { waiting: 'Esperando jugadores', playing: 'Jugando ahora', between: 'Entre rondas', finished: 'Partida terminada' };
+
+export default function OnlineLobby({ directory, selfId, nickname, onNickname, onJoin, onWatch, onInvite, connected, busy, room }) {
+  const [query, setQuery] = useState('');
+  const search = query.trim().toLocaleLowerCase('es');
+  const people = directory.people.filter(p => p.id !== selfId && p.nickname.toLocaleLowerCase('es').includes(search));
+  const tables = directory.rooms.filter(r => [r.host, ...r.players.map(p => p.nickname)].some(name => name.toLocaleLowerCase('es').includes(search)));
+  const disabled = busy || !connected || !nickname.trim();
+  const inviteAvailable = !room || (room.role === 'player' && room.phase === 'waiting' && room.players.length < room.capacity);
+  return <section className={`online-hub ${room ? 'compact-online' : ''}`} id="online" aria-labelledby="online-title">
+    <header className="online-heading"><div><span className="eyebrow"><Radio size={14}/> LA COMUNIDAD EN VIVO</span><h2 id="online-title">{room ? 'Invitá a alguien que esté online.' : 'Tu gente, a un toque.'}</h2><p>{room ? 'La invitación le aparece acá mismo, sin copiar códigos.' : 'Buscá el apodo de tu amigo, entrá a su mesa o quedate a mirar.'}</p></div><span className={`online-count ${connected ? '' : 'offline'}`}><Users size={17}/>{connected ? `${directory.people.length} online` : 'Reconectando…'}</span></header>
+    <div className="online-filters">{!room && <label className="online-name"><span>Tu apodo para jugar online</span><input maxLength={20} autoComplete="nickname" placeholder="Elegí tu apodo" value={nickname} onChange={e => onNickname(e.target.value)}/></label>}<label className="online-search"><span><Search size={16}/>Buscar por apodo</span><input type="search" placeholder="¿A quién buscás?" value={query} onChange={e => setQuery(e.target.value)}/></label></div>
+    {!nickname.trim() && <p className="online-help">Escribí tu apodo para entrar, invitar o mirar. No necesitás una cuenta.</p>}
+    {!room && nickname.trim() && <p className="online-help">«Invitar» arma una mesa con la modalidad y visibilidad que elegiste arriba. Tu amigo recibe la invitación en esta página.</p>}
+    <div className="online-columns">{!room && <section className="online-tables"><h3>Mesas online <span>{tables.length}</span></h3><div className="online-list">
+      {tables.length ? tables.map(table => {
+        const free = table.capacity - table.filled, joinable = table.phase === 'waiting' && free > 0;
+        return <article className="online-table" key={table.code}><div className="online-table-head"><b>Mesa de {table.host}</b><span className={joinable ? 'table-open' : ''}>{phases[table.phase]}</span></div><p className="online-player-names">{table.players.map(p => `${p.nickname}${p.isBot ? ' (bot)' : !p.connected ? ' (reconectando)' : ''}`).join(' · ')}</p><div className="online-table-meta"><span><Users size={14}/>{table.filled}/{table.capacity} · {table.capacity === 2 ? '1 vs 1' : '2 vs 2'}</span>{table.phase !== 'waiting' && <span>{table.scores[0]} — {table.scores[1]}</span>}<span><Eye size={14}/>{table.spectators}</span></div><div className="online-table-actions">{joinable && <button className="primary-button" disabled={disabled} onClick={() => onJoin(table.code)}>Entrar a jugar</button>}<button className="secondary-button" disabled={disabled} onClick={() => onWatch(table.code)}><Eye size={15}/>{table.phase === 'waiting' ? 'Ver mesa' : 'Mirar partida'}</button>{!joinable && table.phase === 'waiting' && <small>Mesa completa</small>}</div></article>;
+      }) : <div className="online-empty"><Users size={25}/><b>{search ? 'No hay mesas con ese apodo.' : 'La próxima mesa puede ser la tuya.'}</b><p>{search ? 'Probá buscar a tu amigo en las personas online.' : 'Creá una mesa o invitá a alguien de la lista. Si no hay nadie, el bot siempre está.'}</p><Bot size={20}/></div>}
+    </div></section>}
+    <section className="online-people"><h3>Personas conectadas <span>{people.length}</span></h3><div className="online-list">{people.length ? people.map(person => <article className="online-person" key={person.id}><span className="online-avatar">{person.nickname[0].toUpperCase()}</span><div><b>{person.nickname}</b><small>{statuses[person.status]}</small></div><div className="person-actions">{person.status === 'available' && inviteAvailable ? <button className="secondary-button" disabled={disabled} onClick={() => onInvite(person.id)}><UserPlus size={15}/>Invitar</button> : !room && person.canJoin ? <button className="secondary-button" disabled={disabled} onClick={() => onJoin(person.code)}>Entrar</button> : !room && person.canWatch ? <button className="secondary-button" disabled={disabled} onClick={() => onWatch(person.code)}><Eye size={15}/>Mirar</button> : null}</div></article>) : <div className="online-empty"><Users size={25}/><b>{search ? 'No encontramos ese apodo.' : 'Todavía no hay otras personas online.'}</b><p>{search ? 'La lista se actualiza cuando se conecte.' : 'Podés empezar una práctica contra el bot mientras llega tu gente.'}</p></div>}</div></section></div>
+  </section>;
+}

@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { io } from 'socket.io-client';
-import { ArrowUpRight, ArrowRight, Check, Copy, Link, Users, X, ChevronRight, CircleHelp, LogOut, Music2, Flag, MessageCircle, ShieldCheck, RotateCcw } from 'lucide-react';
+import { ArrowUpRight, ArrowRight, Check, Copy, Link, Users, X, ChevronRight, CircleHelp, LogOut, Music2, Flag, MessageCircle, ShieldCheck, RotateCcw, Bot, Eye, Radio } from 'lucide-react';
 import { Card, SuitIcon, SUITS } from './cards';
 import AudioControls from './AudioControls';
+import OnlineLobby from './OnlineLobby';
 import { useTableAnnouncements, TableAnnouncement, CantoResult } from './announcements';
 
 const socket = io(import.meta.env.VITE_SERVER_URL || undefined, { autoConnect: false });
 const labels = { start: 'Repartir cartas', next: 'Siguiente ronda', rematch: 'Jugar la revancha', truco: 'Truco', retruco: 'Retruco', cuatro: 'Vale cuatro', envido: 'Envido', real: 'Real envido', falta: 'Falta envido', flor: '¡Flor!', contra: 'Contraflor', resto: 'Contraflor al resto', accept: 'Quiero', decline: 'No quiero', fold: 'Irme al mazo' };
 const initialCode = new URLSearchParams(location.search).get('sala')?.toUpperCase() || '';
+const initialWatch = new URLSearchParams(location.search).get('mirar') === '1';
 const stored = (key, fallback = '') => { try { return sessionStorage.getItem(key) || fallback; } catch { return fallback; } };
 const save = (key, value) => { try { sessionStorage.setItem(key, value); } catch { /* Navegación privada sin almacenamiento. */ } };
 const forget = key => { try { sessionStorage.removeItem(key); } catch {} };
@@ -16,6 +18,9 @@ export default function App() {
   const [nickname, setNickname] = useState(stored('nickname')), [code, setCode] = useState(initialCode), [capacity, setCapacity] = useState(2);
   const [joinMode, setJoinMode] = useState(Boolean(initialCode)), [error, setError] = useState(''), [toast, setToast] = useState('');
   const [rules, setRules] = useState(false), [leaveConfirm, setLeaveConfirm] = useState(false), [reviewResult, setReviewResult] = useState(null);
+  const [directory, setDirectory] = useState({ people: [], rooms: [] }), [selfId, setSelfId] = useState(null), [isPublic, setPublic] = useState(true);
+  const [invitations, setInvitations] = useState([]);
+  const [watchMode, setWatchMode] = useState(initialWatch);
   const latest = useRef(null), active = useRef(initialCode), lastRevision = useRef(-1);
   const announcements = useTableAnnouncements(room);
   const toastTimer = useRef();
@@ -25,25 +30,61 @@ export default function App() {
     lastRevision.current = state.revision;
     latest.current = state; setRoom(state);
   };
+  const resetTable = () => {
+    const currentCode = active.current;
+    if (currentCode) { forget(`token:${currentCode}`); forget(`view:${currentCode}`); }
+    active.current = ''; latest.current = null; lastRevision.current = -1;
+    setRoom(null); setCode(''); setJoinMode(false); setWatchMode(false); setLeaveConfirm(false); setReviewResult(null);
+    history.replaceState(null, '', location.pathname);
+  };
+  const rememberMembership = result => {
+    active.current = result.code; save('nickname', nickname.trim()); save(`view:${result.code}`, result.state.role);
+    if (result.token) save(`token:${result.code}`, result.token);
+    if (result.selfId) setSelfId(result.selfId);
+    setInvitations([]); acceptState(result.state);
+    history.replaceState(null, '', `?sala=${result.code}${result.state.role === 'spectator' ? '&mirar=1' : ''}`);
+  };
   useEffect(() => {
     const onConnect = () => {
       setConnected(true); setError('');
       const currentCode = active.current;
       const token = currentCode && stored(`token:${currentCode}`);
-      if (currentCode && token) {
-        socket.timeout(8000).emit('join', { code: currentCode, token }, (err, response) => {
-          if (err || response?.error) { setError(err ? 'No se pudo recuperar la mesa. Intentá de nuevo.' : response.error); latest.current = null; setRoom(null); forget(`token:${currentCode}`); return; }
+      const watching = stored(`view:${currentCode}`, initialWatch && currentCode === initialCode ? 'spectator' : 'player') === 'spectator';
+      if (currentCode && (token || watching && stored('nickname'))) {
+        socket.timeout(8000).emit(watching ? 'watch' : 'join', { code: currentCode, token, nickname: stored('nickname') }, (err, response) => {
+          if (err) { setError('No se pudo recuperar la mesa. Recargá para intentar de nuevo.'); return; }
+          if (response?.error) { resetTable(); setError(response.error); return; }
+          if (response.selfId) setSelfId(response.selfId);
           acceptState(response.state);
         });
       }
     };
     const onDisconnect = () => setConnected(false);
     const onReplaced = () => { setError('Tu lugar se abrió en otra pestaña.'); active.current = ''; latest.current = null; setRoom(null); };
+    const onError = () => { setConnected(false); setError('No hay conexión con el servidor. Estamos intentando reconectar.'); };
+    const onDirectory = data => setDirectory(data);
+    const onInvitation = invitation => setInvitations(current => [...current.filter(i => i.id !== invitation.id), invitation].slice(-5));
+    const onClosed = () => { resetTable(); showToast('La mesa se cerró. Podés elegir otra para mirar.'); };
     socket.on('connect', onConnect); socket.on('disconnect', onDisconnect); socket.on('state', acceptState);
-    socket.on('connect_error', () => { setConnected(false); setError('No hay conexión con el servidor. Estamos intentando reconectar.'); });
+    socket.on('connect_error', onError); socket.on('directory', onDirectory); socket.on('invitation', onInvitation); socket.on('room-closed', onClosed);
     socket.on('replaced', onReplaced); socket.connect();
-    return () => { socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); socket.off('state', acceptState); socket.off('replaced', onReplaced); socket.disconnect(); clearTimeout(toastTimer.current); };
+    return () => { socket.off('connect', onConnect); socket.off('disconnect', onDisconnect); socket.off('state', acceptState); socket.off('replaced', onReplaced); socket.off('connect_error', onError); socket.off('directory', onDirectory); socket.off('invitation', onInvitation); socket.off('room-closed', onClosed); socket.disconnect(); clearTimeout(toastTimer.current); };
   }, []);
+  useEffect(() => {
+    if (!connected || room) return;
+    const name = nickname.trim();
+    const timer = setTimeout(() => {
+      save('nickname', name);
+      socket.timeout(5000).emit('identify', { nickname: name }, (err, response) => { if (!err && response?.selfId) setSelfId(response.selfId); });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [nickname, connected, room?.code]);
+  useEffect(() => {
+    if (!invitations.length) return;
+    const expiry = Math.min(...invitations.map(i => i.expiresAt));
+    const timer = setTimeout(() => setInvitations(current => current.filter(i => i.expiresAt > Date.now())), Math.max(0, expiry - Date.now()));
+    return () => clearTimeout(timer);
+  }, [invitations]);
   async function request(event, payload) {
     if (!socket.connected) { setError('Esperá a recuperar la conexión.'); return; }
     setBusy(true); setError('');
@@ -56,86 +97,115 @@ export default function App() {
   }
   async function enter(e) {
     e.preventDefault(); save('nickname', nickname.trim());
-    const result = await request(joinMode ? 'join' : 'create', { nickname: nickname.trim(), code: code.trim().toUpperCase(), capacity, token: stored(`token:${code.trim().toUpperCase()}`) });
+    const result = await request(joinMode ? watchMode ? 'watch' : 'join' : 'create', { nickname: nickname.trim(), code: code.trim().toUpperCase(), capacity, isPublic, token: stored(`token:${code.trim().toUpperCase()}`) });
     if (!result) return;
-    active.current = result.code; save(`token:${result.code}`, result.token); acceptState(result.state);
-    history.replaceState(null, '', `?sala=${result.code}`);
+    rememberMembership(result);
   }
+  async function enterOnline(code, watch = false) {
+    if (!nickname.trim()) { setError('Escribí tu apodo para entrar a la mesa.'); return; }
+    const result = await request(watch ? 'watch' : 'join', { code, nickname: nickname.trim(), ...(watch ? {} : { token: stored(`token:${code}`) }) });
+    if (result) rememberMembership(result);
+  }
+  async function practice() {
+    const result = await request('create', { nickname: nickname.trim(), capacity: 2, bot: true, isPublic });
+    if (result) rememberMembership(result);
+  }
+  async function invite(personId) {
+    if (!room) {
+      const result = await request('create', { nickname: nickname.trim(), capacity, isPublic });
+      if (!result) return;
+      rememberMembership(result);
+    }
+    const result = await request('invite', { personId });
+    if (result) showToast(`Invitación enviada a ${result.nickname}.`);
+  }
+  async function sit() { const result = await request('sit', {}); if (result) rememberMembership(result); }
+  const editBot = (remove, seat) => request(remove ? 'remove-bot' : 'add-bot', { seat, revision: latest.current.revision });
   const action = (action, cardId) => request('action', { action, cardId, revision: latest.current.revision });
-  const roomURL = () => { const url = new URL(location.href); url.search = `?sala=${room.code}`; return url.href; };
+  const roomURL = () => { const url = new URL(location.href); url.search = `?sala=${room.code}${room.role === 'spectator' ? '&mirar=1' : ''}`; return url.href; };
   async function copyLink() {
     try { await navigator.clipboard.writeText(roomURL()); showToast('Enlace copiado. ¡Invitá a tu gente!'); }
     catch { showToast('Seleccioná el enlace debajo para copiarlo.'); }
   }
   async function leave() {
     const result = await request('leave', {}); if (!result) return;
-    forget(`token:${room.code}`); active.current = ''; latest.current = null; lastRevision.current = -1;
-    setRoom(null); setCode(''); setJoinMode(false); setLeaveConfirm(false); history.replaceState(null, '', location.pathname);
+    resetTable();
   }
+  const onlineLobby = <OnlineLobby directory={directory} selfId={selfId} nickname={nickname} onNickname={setNickname} onJoin={code => enterOnline(code)} onWatch={code => enterOnline(code, true)} onInvite={invite} connected={connected} busy={busy} room={room}/>;
   return <div className="app-shell">
     <header className="topbar"><button className="brand" aria-label="Truco Oriental, inicio" onClick={() => room ? showToast('Ya estás en tu mesa.') : window.scrollTo({ top: 0, behavior: 'smooth' })}><span className="brand-mark">✳</span><span>truco<span className="brand-light">oriental</span><span className="brand-caption">EL DE ACÁ. CON OTRO RITMO.</span></span></button>
-      <nav><span className="nav-current">{room ? 'Tu mesa' : 'A jugar'}</span><button onClick={() => setRules(true)}>Cómo se juega <ArrowUpRight size={14}/></button></nav>
+      <nav><span className="nav-current">{room?.role === 'spectator' ? 'Mirando' : room ? 'Tu mesa' : 'A jugar'}</span><button onClick={() => setRules(true)}>Cómo se juega <ArrowUpRight size={14}/></button></nav>
       <div className="header-right"><span className={`connection ${connected ? '' : 'offline'}`}><i/>{connected ? 'En línea' : 'Conectando'}</span><AudioControls/></div>
     </header>
     {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Cerrar aviso"><X size={16}/></button></div>}
     {!room ? <main className="landing">
       <div className="intro-line"><span className="eyebrow"><span className="little-line"/> TRUCO URUGUAYO, ONLINE</span><span className="edition">40 CARTAS · 4 PALOS · MIL EXCUSAS PARA JUNTARSE</span></div>
-      <div className="landing-grid"><section className="hero"><h1>La misma mesa.<br/><em>Estés donde estés.</em></h1><p className="hero-copy">Un truco entre amigos, aunque estén lejos.<br/>Poné tu apodo, compartí el enlace y que hablen las cartas.</p>
+      <div className="landing-grid"><section className="hero"><h1>La misma mesa.<br/><em>Estés donde estés.</em></h1><p className="hero-copy">Un truco entre amigos, aunque estén lejos.<br/>Poné tu apodo, encontrá a tu gente online y que hablen las cartas.</p>
         <div className="hero-tags"><span><Check size={13}/> Sin registro</span><span><Check size={13}/> En tiempo real</span><span><Check size={13}/> Bien uruguayo</span></div>
+        <a className="online-shortcut" href="#online"><Radio size={16}/>Ver quién está online <span>{directory.people.length}</span></a>
         <div className="demo-scene" aria-label="Cartas musicales de truco"><div className="demo-oval"><span className="table-ring"/><span className="table-word">ORIENTAL</span></div><div className="demo-cards"><Card className="demo-left" card={{ number: 1, suit: 'guitarras' }}/><Card className="demo-mid" card={{ number: 2, suit: 'notas' }}/><Card className="demo-right" card={{ number: 7, suit: 'microfonos' }}/></div><div className="demo-bubble">¿Un truquito? <Music2 size={14}/></div><span className="demo-star star-one">✳</span><span className="demo-star star-two">✦</span><span className="demo-footnote">LAS CARTAS DE SIEMPRE. UN NUEVO COMPÁS.</span></div>
       </section>
       <section className="entry-panel"><div className="panel-heading"><span className="panel-icon"><Users size={21}/></span><span className="tiny-label">HAY LUGAR PARA VOS</span></div><h2>{joinMode ? 'Te estaban esperando.' : 'Armá la mesa.'}</h2><p>{joinMode ? 'Ingresá tu apodo y sumate a la partida.' : 'Lo mejor del truco empieza con una invitación.'}</p><form onSubmit={enter}>
         <label className="input-label" htmlFor="nickname">Tu apodo <span>Así te van a conocer</span></label><input id="nickname" placeholder="¿Cómo te dicen?" maxLength={20} required autoComplete="nickname" value={nickname} onChange={e => setNickname(e.target.value)}/>
         {joinMode ? <><label className="input-label" htmlFor="code">Código de la mesa</label><input id="code" className="code-input" placeholder="Ej. A1B2C3D4" maxLength={8} minLength={8} pattern="[a-fA-F0-9]{8}" required value={code} onChange={e => setCode(e.target.value.toUpperCase().replace(/[^A-F0-9]/g, ''))}/></> : <><label className="input-label">¿Cómo jugamos?</label><div className="mode-selector" role="radiogroup" aria-label="Modalidad">{[2, 4].map(n => <button type="button" role="radio" aria-checked={capacity === n} key={n} className={capacity === n ? 'selected' : ''} onClick={() => setCapacity(n)}><span className="mode-title"><Users size={16}/>{n === 2 ? '1 vs 1' : '2 vs 2'}<span className="radio-dot"/></span><small>{n === 2 ? 'Mano a mano' : 'En equipos'}</small></button>)}</div></>}
-        <button className="primary-button" disabled={busy || !connected || !nickname.trim()} type="submit">{busy ? 'Preparando la mesa…' : joinMode ? 'Entrar a la mesa' : 'Crear mesa'}<ArrowRight size={18}/></button>
-        <p className="form-footnote"><Link size={12}/>{joinMode ? 'Sin cuentas. Directo a las cartas.' : 'Vas a recibir un enlace para invitar a tus amigos.'}</p>
-      </form><div className="entry-divider"/><button className="join-switch" onClick={() => { setJoinMode(!joinMode); setError(''); }}>{joinMode ? '¿Querés armar otra mesa?' : '¿Ya te invitaron a una mesa?'}<span>{joinMode ? 'Crear mesa' : 'Entrar con código'}<ChevronRight size={14}/></span></button></section></div>
-      <section className="feature-strip"><div><span className="feature-number">01</span><div><h3>Tu gente, tu mesa.</h3><p>De a dos o en equipos. Vos elegís.</p></div></div><div><span className="feature-number">02</span><div><h3>Pasá el enlace y listo.</h3><p>Un mensaje y ya están todos acá.</p></div></div><div><span className="feature-number">03</span><div><h3>Hasta las 30, como en casa.</h3><p>Con muestra, piezas, envido y flor.</p></div></div></section>
+        {!joinMode && <label className="visibility-toggle"><input type="checkbox" checked={isPublic} onChange={e => setPublic(e.target.checked)}/><span>Mesa pública <small>Aparece en Online para jugar y mirar.</small></span></label>}
+        <button className="primary-button" disabled={busy || !connected || !nickname.trim()} type="submit">{busy ? 'Preparando la mesa…' : joinMode ? watchMode ? 'Mirar partida' : 'Entrar a la mesa' : 'Crear mesa'}<ArrowRight size={18}/></button>
+        {!joinMode && <button className="practice-button" type="button" disabled={busy || !connected || !nickname.trim()} onClick={practice}><Bot size={18}/>Jugar contra el bot</button>}
+        <p className="form-footnote"><Link size={12}/>{joinMode ? 'Sin cuentas. Directo a las cartas.' : isPublic ? 'Tu mesa aparece online. También tendrás un enlace.' : 'Mesa privada: compartí una invitación o el enlace.'}</p>
+      </form><div className="entry-divider"/><button className="join-switch" onClick={() => { setJoinMode(!joinMode); setWatchMode(false); setError(''); }}>{joinMode ? '¿Querés armar otra mesa?' : '¿Ya te invitaron a una mesa?'}<span>{joinMode ? 'Crear mesa' : 'Entrar con código'}<ChevronRight size={14}/></span></button></section></div>
+      {onlineLobby}
+      <section className="feature-strip"><div><span className="feature-number">01</span><div><h3>Tu gente, tu mesa.</h3><p>De a dos o en equipos. Vos elegís.</p></div></div><div><span className="feature-number">02</span><div><h3>Entrá con un toque.</h3><p>Ves quién está online y te sumás.</p></div></div><div><span className="feature-number">03</span><div><h3>Hasta las 30, como en casa.</h3><p>Con muestra, piezas, envido y flor.</p></div></div></section>
       <section className="musical-footer"><span>UN MAZO CON IDENTIDAD PROPIA</span><div>{Object.entries(SUITS).map(([key, suit]) => <span key={key} style={{ color: suit.color }}><SuitIcon suit={key} size={20}/>{suit.name}</span>)}</div><button onClick={() => setRules(true)}>Conocé las cartas <ArrowUpRight size={14}/></button></section>
-    </main> : <main className="room-page"><div className="room-heading"><div><span className="eyebrow">{room.phase === 'waiting' ? 'QUE SE ARME LA RONDA' : `RONDA ${room.roundNumber} · A 30 PUNTOS`}</span><h1>La mesa de {room.players.find(p => p.seat === room.host)?.nickname}.</h1></div><div className="room-tools"><span className="room-code">#{room.code}</span><button className="secondary-button" onClick={copyLink}><Copy size={15}/><span>Copiar enlace</span></button><button className="icon-button" aria-label="Salir de la mesa" onClick={() => setLeaveConfirm(true)}><LogOut size={17}/></button></div></div>
-      <div className="game-layout"><section className="game-main">{room.phase === 'waiting' ? <Lobby room={room} url={roomURL()} copy={copyLink} action={action} busy={busy}/> : <GameTable room={room} action={action} busy={busy || !connected || Boolean(announcements.active)} pendingCards={announcements.pendingCards}/>}
+    </main> : <main className="room-page"><div className="room-heading"><div><span className="eyebrow">{room.role === 'spectator' ? 'MODO ESPECTADOR' : room.phase === 'waiting' ? 'QUE SE ARME LA RONDA' : `RONDA ${room.roundNumber} · A 30 PUNTOS`}</span><h1>La mesa de {room.players.find(p => p.seat === room.host)?.nickname || 'Truco Oriental'}.</h1><div className="room-presence"><span>{room.isPublic ? 'Mesa pública' : 'Mesa privada'}</span><span><Eye size={14}/>{room.spectatorCount} mirando</span>{room.players.some(p => p.isBot) && <span><Bot size={14}/>Con bot</span>}</div></div><div className="room-tools"><span className="room-code">#{room.code}</span><button className="secondary-button" onClick={copyLink}><Copy size={15}/><span>Copiar enlace</span></button><button className="icon-button" aria-label={room.role === 'spectator' ? 'Dejar de mirar' : 'Salir de la mesa'} onClick={() => room.role === 'spectator' ? leave() : setLeaveConfirm(true)} disabled={busy}><LogOut size={17}/></button></div></div>
+      <div className="game-layout"><section className="game-main">{room.phase === 'waiting' ? <><Lobby room={room} url={roomURL()} copy={copyLink} action={action} busy={busy || !connected} onAddBot={() => editBot(false)} onRemoveBot={seat => editBot(true, seat)} onSit={sit}/>{room.role === 'player' && onlineLobby}</> : <GameTable room={room} action={action} busy={busy || !connected || Boolean(announcements.active)} pendingCards={announcements.pendingCards}/>}
       </section><aside className="game-sidebar"><Scoreboard room={room}/>{Boolean(room.round?.sideResults?.length) && <section className="canto-history"><span className="tiny-label">RESULTADOS DE LOS CANTOS</span>{room.round.sideResults.map(result => <button key={result.id} className="secondary-button" onClick={() => setReviewResult(result)}><span>{result.label} · +{result.points}</span><span>Ver resultado <ArrowUpRight size={13}/></span></button>)}</section>}<section className="activity-panel"><div className="aside-heading"><span className="tiny-label">LO QUE SE CANTÓ</span><MessageCircle size={15}/></div><div className="activity-log" role="log" aria-label="Actividad de la mesa">{room.log.slice(-12).reverse().map((entry, i) => <div key={entry.id} className={`log-entry ${entry.type} ${i === 0 ? 'latest' : ''}`}><span className="log-dot"/><p>{entry.message}</p></div>)}</div></section><button className="rules-shortcut" onClick={() => setRules(true)}><CircleHelp size={17}/><span>¿Cómo era esa regla?</span><ArrowUpRight size={15}/></button></aside></div>
     </main>}
     <footer className="site-footer"><span>Hecho para compartir la mesa.</span><span>TRUCO ORIENTAL <span className="footer-star">✳</span> URUGUAY</span><button onClick={() => setRules(true)}>Las reglas de casa <ArrowUpRight size={12}/></button></footer>
     {toast && <div className="toast" role="status"><Check size={16}/>{toast}</div>}
+    {!room && invitations.length > 0 && <section className="invitation-panel" aria-label="Invitaciones para jugar" aria-live="polite">{invitations.map(invitation => <article key={invitation.id}><span className="eyebrow">TE INVITARON A JUGAR</span><h2>{invitation.from} te espera.</h2><p>Una mesa de {invitation.capacity === 2 ? '1 vs 1' : '2 vs 2'}, sin copiar códigos.</p><div><button className="primary-button" disabled={busy || !connected || !nickname.trim()} onClick={() => enterOnline(invitation.code)}>Aceptar y jugar</button><button className="secondary-button" onClick={() => setInvitations(current => current.filter(i => i.id !== invitation.id))}>Ahora no</button></div></article>)}</section>}
     {room && <TableAnnouncement event={announcements.active} you={room.you} onDismiss={announcements.dismiss}/>}
     {reviewResult && <Modal wide eyebrow="LOS TANTOS DE LA RONDA" title="Resultado del canto" onClose={() => setReviewResult(null)}><CantoResult result={reviewResult} you={room?.you}/></Modal>}
     {rules && <Rules onClose={() => setRules(false)}/>}
     {leaveConfirm && <Modal title="¿Te vas de la mesa?" onClose={() => setLeaveConfirm(false)}><p className="modal-copy">{['playing', 'between'].includes(room?.phase) ? 'Si salís durante la partida, gana el equipo rival. Podés cerrar esta ventana y volver a conectarte sin abandonar tu lugar.' : 'Vas a liberar tu lugar en esta mesa.'}</p><div className="modal-actions"><button className="secondary-button" onClick={() => setLeaveConfirm(false)}>Me quedo</button><button className="danger-button" disabled={busy} onClick={leave}>Salir de la mesa</button></div></Modal>}
   </div>;
 }
-function Lobby({ room, url, copy, action, busy }) {
+function Lobby({ room, url, copy, action, busy, onAddBot, onRemoveBot, onSit }) {
   const full = room.players.length === room.capacity;
-  return <div className="lobby"><div className="lobby-top"><span className="live-pill"><i/>{room.players.length} de {room.capacity} en la mesa</span><span className="tiny-label">{room.capacity === 2 ? 'MANO A MANO' : 'POR EQUIPOS'}</span></div><div className="lobby-emblem">✳</div><h2>{full ? 'Estamos todos.' : 'Faltan tus cómplices.'}</h2><p>{full ? 'Cuando quieran, que empiecen las cartas.' : 'Pasales el enlace. La mesa los está esperando.'}</p><div className="lobby-seats">{Array.from({ length: room.capacity }, (_, seat) => { const player = room.players.find(p => p.seat === seat); return <div key={seat} className={`lobby-seat ${player ? 'occupied' : ''}`}><span className={`avatar team-${seat % 2}`}>{player?.nickname.slice(0, 1).toUpperCase() || '+'}</span><b>{player?.nickname || 'Lugar libre'}</b><small>{player ? player.connected ? `Equipo ${seat % 2 + 1}${seat === room.you ? ' · Vos' : ''}` : 'Reconectando…' : 'Esperando…'}</small></div>; })}</div><div className="share-link"><input readOnly aria-label="Enlace para compartir" value={url} onFocus={e => e.target.select()}/><button aria-label="Copiar enlace" onClick={copy}><Copy size={17}/></button></div><div className="lobby-buttons"><a className="secondary-button" href={`https://wa.me/?text=${encodeURIComponent(`¿Un truquito? Sumate a mi mesa: ${url}`)}`} target="_blank" rel="noreferrer"><MessageCircle size={16}/>Invitar por WhatsApp<ArrowUpRight size={14}/></a>{room.actions.includes('start') && <button className="primary-button" disabled={busy} onClick={() => action('start')}>Repartir cartas<ArrowRight size={17}/></button>}</div><span className="lobby-note"><ShieldCheck size={14}/>{room.you === room.host ? 'Vos repartís cuando estén todos conectados.' : 'El anfitrión va a repartir cuando estén todos.'}</span></div>;
+  const host = room.role === 'player' && room.you === room.host;
+  return <div className="lobby"><div className="lobby-top"><span className="live-pill"><i/>{room.players.length} de {room.capacity} en la mesa</span><span className="tiny-label">{room.capacity === 2 ? 'MANO A MANO' : 'POR EQUIPOS'}</span></div><div className="lobby-emblem">✳</div><h2>{room.role === 'spectator' ? 'Estás mirando la mesa.' : full ? 'Estamos todos.' : 'Faltan tus cómplices.'}</h2><p>{full ? 'Cuando quieran, que empiecen las cartas.' : 'Invitá a alguien online o completá los lugares con bots.'}</p>
+    <div className="lobby-seats">{Array.from({ length: room.capacity }, (_, seat) => { const player = room.players.find(p => p.seat === seat); return <div key={seat} className={`lobby-seat ${player ? 'occupied' : ''}`}><span className={`avatar team-${seat % 2}`}>{player?.isBot ? <Bot size={22}/> : player?.nickname.slice(0, 1).toUpperCase() || '+'}</span><b>{player?.nickname || 'Lugar libre'}</b><small>{player ? player.connected ? `Equipo ${seat % 2 + 1}${seat === room.you ? ' · Vos' : ''}` : 'Reconectando…' : 'Esperando…'}</small>{host && player?.isBot && <button className="remove-bot" disabled={busy} onClick={() => onRemoveBot(seat)} aria-label={`Quitar a ${player.nickname}`}>Quitar bot</button>}</div>; })}</div>
+    <div className="lobby-buttons">{host && !full && <button className="secondary-button add-bot-button" disabled={busy} onClick={onAddBot}><Bot size={18}/>Agregar bot</button>}{room.role === 'spectator' && !full && <button className="primary-button" disabled={busy} onClick={onSit}>Sentarme a jugar</button>}{room.actions.includes('start') && <button className="primary-button" disabled={busy} onClick={() => action('start')}>Repartir cartas</button>}</div>
+    <div className="share-link"><input readOnly aria-label="Enlace para compartir" value={url} onFocus={e => e.target.select()}/><button aria-label="Copiar enlace" onClick={copy}><Copy size={17}/></button></div><div className="lobby-buttons"><a className="secondary-button" href={`https://wa.me/?text=${encodeURIComponent(`¿Un truquito? Sumate a mi mesa: ${url}`)}`} target="_blank" rel="noreferrer"><MessageCircle size={16}/>Invitar por WhatsApp</a></div><span className="lobby-note"><ShieldCheck size={14}/>{host ? 'Vos repartís cuando estén todos conectados.' : 'El anfitrión va a repartir cuando estén todos.'}</span></div>;
 }
 function Scoreboard({ room }) {
-  return <section className="score-panel"><div className="aside-heading"><span className="tiny-label">EL TANTEADOR</span><Flag size={15}/></div><div className="score-teams">{[0, 1].map(team => <div key={team} className={room.you % 2 === team ? 'my-team' : ''}><span>{room.capacity === 2 ? team === room.you % 2 ? 'Vos' : 'Rival' : team === room.you % 2 ? 'Nosotros' : 'Ellos'}</span><strong>{room.scores[team]}</strong><small>{room.scores[team] >= 15 ? 'BUENAS' : 'MALAS'}</small></div>)}</div><div className="score-track">{[0, 1].map(team => <div key={team}><span style={{ width: `${Math.min(room.scores[team] / 30, 1) * 100}%` }}/><i/></div>)}</div><div className="score-caption"><span>0</span><span>15</span><span>30</span></div><p>15 malas + 15 buenas. Hasta las 30.</p></section>;
+  return <section className="score-panel"><div className="aside-heading"><span className="tiny-label">EL TANTEADOR</span><Flag size={15}/></div><div className="score-teams">{[0, 1].map(team => <div key={team} className={room.role === 'player' && room.you % 2 === team ? 'my-team' : ''}><span>{room.role === 'spectator' ? `Equipo ${team + 1}` : room.capacity === 2 ? team === room.you % 2 ? 'Vos' : 'Rival' : team === room.you % 2 ? 'Nosotros' : 'Ellos'}</span><strong>{room.scores[team]}</strong><small>{room.scores[team] >= 15 ? 'BUENAS' : 'MALAS'}</small></div>)}</div><div className="score-track">{[0, 1].map(team => <div key={team}><span style={{ width: `${Math.min(room.scores[team] / 30, 1) * 100}%` }}/><i/></div>)}</div><div className="score-caption"><span>0</span><span>15</span><span>30</span></div><p>15 malas + 15 buenas. Hasta las 30.</p></section>;
 }
 function GameTable({ room, action, busy, pendingCards }) {
   const r = room.round, me = room.players.find(p => p.seat === room.you);
-  const others = room.players.filter(p => p.seat !== room.you).sort((a, b) => (a.seat - room.you + room.capacity) % room.capacity - (b.seat - room.you + room.capacity) % room.capacity);
+  const watching = room.role === 'spectator';
+  const others = watching ? [...room.players].sort((a,b) => a.seat-b.seat) : room.players.filter(p => p.seat !== room.you).sort((a, b) => (a.seat - room.you + room.capacity) % room.capacity - (b.seat - room.you + room.capacity) % room.capacity);
   const isTurn = room.phase === 'playing' && r.turn === room.you && !r.pending && !r.awaitingFlor;
   const canPlay = room.actions.includes('play') && !busy;
   const paused = room.players.some(p => !p.connected);
   const displayed = (r.current.length ? r.current : r.lastTrick).filter(play => !pendingCards.has(play.eventId));
   const waiting = room.players.find(p => p.seat === r.turn)?.nickname;
   const actionIds = room.actions.filter(a => a !== 'play' && a !== 'fold');
-  const status = paused ? 'La mesa está pausada hasta que vuelvan a conectarse todos.'
-    : room.phase === 'finished' ? room.winner === room.you % 2 ? '¡Ganaron la partida! Bien jugado.' : 'Esta vez ganó el otro equipo. ¿Sale revancha?'
-    : room.phase === 'between' ? `${r.result.team === room.you % 2 ? 'Ganaron' : 'Ganó el otro equipo'} esta ronda · ${r.result.points} ${r.result.points === 1 ? 'punto' : 'puntos'}`
+  const status = room.phase === 'finished' ? watching ? `El equipo ${room.winner + 1} ganó la partida.` : room.winner === room.you % 2 ? '¡Ganaron la partida! Bien jugado.' : 'Esta vez ganó el otro equipo. ¿Sale revancha?'
+    : room.phase === 'between' ? `${watching ? `El equipo ${r.result.team + 1} ganó` : r.result.team === room.you % 2 ? 'Ganaron' : 'Ganó el otro equipo'} esta ronda · ${r.result.points} ${r.result.points === 1 ? 'punto' : 'puntos'}`
+    : paused ? 'La mesa está pausada hasta que vuelvan a conectarse todos.'
     : room.actions.includes('flor') ? '¡Tenés flor! Cantala antes de jugar tu primera carta.'
     : r.awaitingFlor ? 'Esperando que se anuncien las flores de la mesa.'
     : r.pending ? `${room.players.find(p => p.seat === r.pending.caller)?.nickname} cantó ${r.pending.label.toLowerCase()}. ${actionIds.includes('accept') ? 'Te toca responder.' : 'Esperando respuesta…'}`
-    : isTurn ? 'Te toca. Elegí una carta o hacé un canto.' : `Juega ${waiting}. Que hablen las cartas.`;
-  return <><div className="table-wrapper"><div className="table-topline"><span className="tiny-label">{room.capacity === 2 ? 'MANO A MANO' : 'POR EQUIPOS'}</span><span className="stake">Ronda por <b>{r.truco} {r.truco === 1 ? 'punto' : 'puntos'}</b></span></div><div className={`felt-table ${room.capacity === 4 ? 'four-players' : ''}`}><span className="felt-brand">✳<small>TRUCO ORIENTAL</small></span>
-      {others.map((p, i) => <div key={p.seat} className={`opponent opponent-${others.length === 1 ? 'top' : ['left', 'top', 'right'][i]} ${r.turn === p.seat && !r.pending && room.phase === 'playing' ? 'their-turn' : ''}`}><div className="opponent-hand">{Array.from({ length: p.count }, (_, j) => <Card back small key={j}/>)}</div><div className="seat-label"><span className={`avatar mini team-${p.seat % 2}`}>{p.nickname[0].toUpperCase()}</span><b>{p.nickname}</b>{p.seat === room.mano && <span className="mano-tag">M</span>}<i className={p.connected ? 'online-dot' : 'offline-dot'}/></div></div>)}
+    : isTurn ? 'Te toca. Elegí una carta o hacé un canto.' : room.players.find(p => p.seat === r.turn)?.isBot ? `${waiting} está pensando…` : `Juega ${waiting}. Que hablen las cartas.`;
+  return <><div className={`table-wrapper ${watching ? 'watching-table' : ''}`}><div className="table-topline"><span className="tiny-label">{watching ? 'ESPECTADOR EN VIVO' : room.capacity === 2 ? 'MANO A MANO' : 'POR EQUIPOS'}</span><span className="stake">Ronda por <b>{r.truco} {r.truco === 1 ? 'punto' : 'puntos'}</b></span></div><div className={`felt-table ${room.capacity === 4 ? 'four-players' : ''}`}><span className="felt-brand">✳<small>TRUCO ORIENTAL</small></span>
+      {others.map((p, i) => <div key={p.seat} className={`opponent opponent-${watching ? (room.capacity === 2 ? ['top','bottom'][i] : ['left','top','right','bottom'][i]) : others.length === 1 ? 'top' : ['left', 'top', 'right'][i]} ${r.turn === p.seat && !r.pending && room.phase === 'playing' ? 'their-turn' : ''}`}><div className="opponent-hand">{Array.from({ length: p.count }, (_, j) => <Card back small key={j}/>)}</div><div className="seat-label"><span className={`avatar mini team-${p.seat % 2}`}>{p.isBot ? <Bot size={14}/> : p.nickname[0].toUpperCase()}</span><b>{p.nickname}</b>{p.seat === room.mano && <span className="mano-tag">M</span>}<i className={p.connected ? 'online-dot' : 'offline-dot'}/></div></div>)}
       <div className="sample-area"><span className="tiny-label">LA MUESTRA</span><Card small card={r.sample}/><span className="sample-caption">Piezas de {SUITS[r.sample.suit].name.toLowerCase()}</span></div>
       <div className="played-area">{displayed.length ? displayed.map((play, i) => <div className="played-card" key={`${play.trick}-${play.seat}`} style={{ '--rotation': `${i % 2 === 0 ? -8 : 9}deg` }}><Card small card={play.card}/><small>{room.players.find(p => p.seat === play.seat)?.nickname}</small></div>) : <span className="empty-table-copy">La primera carta<br/>marca el compás.</span>}</div>
-      <div className="trick-markers" aria-label="Resultado de las bazas">{[0, 1, 2].map(i => <span key={i} className={r.tricks[i] === undefined ? '' : r.tricks[i] === null ? 'tied' : r.tricks[i] === room.you % 2 ? 'won' : 'lost'}>{r.tricks[i] === undefined ? i + 1 : r.tricks[i] === null ? '=' : r.tricks[i] === room.you % 2 ? '✓' : '×'}</span>)}</div>
-    </div><div className="own-seat"><span className={`avatar mini team-${room.you % 2}`}>{me.nickname[0].toUpperCase()}</span><b>{me.nickname} <small>(vos)</small></b>{room.you === room.mano && <span className="mano-tag">MANO</span>}<span className="private-points">Envido <b>{r.envido}</b>{r.flor !== null && <> · Flor <b>{r.flor}</b></>}</span></div>
-    <div className="my-hand">{r.hand.map(card => <Card key={card.id} card={card} onClick={() => action('play', card.id)} disabled={!canPlay}/>)}</div>
+      <div className="trick-markers" aria-label="Resultado de las bazas">{[0, 1, 2].map(i => <span key={i} className={r.tricks[i] === undefined ? '' : r.tricks[i] === null ? 'tied' : watching ? 'observed-win' : r.tricks[i] === room.you % 2 ? 'won' : 'lost'}>{r.tricks[i] === undefined ? i + 1 : r.tricks[i] === null ? '=' : watching ? `E${r.tricks[i]+1}` : r.tricks[i] === room.you % 2 ? '✓' : '×'}</span>)}</div>
+    </div>{watching ? <p className="spectator-note"><Eye size={17}/>Estás mirando en vivo. Las cartas se revelan al jugarlas.</p> : <><div className="own-seat"><span className={`avatar mini team-${room.you % 2}`}>{me.nickname[0].toUpperCase()}</span><b>{me.nickname} <small>(vos)</small></b>{room.you === room.mano && <span className="mano-tag">MANO</span>}<span className="private-points">Envido <b>{r.envido}</b>{r.flor !== null && <> · Flor <b>{r.flor}</b></>}</span></div>
+    <div className="my-hand">{r.hand.map(card => <Card key={card.id} card={card} onClick={() => action('play', card.id)} disabled={!canPlay}/>)}</div></>}
     </div><div className={`turn-status ${isTurn ? 'your-turn' : ''}`} role="status"><span className="status-dot"/>{status}</div>
-    <div className="action-bar"><div className="call-buttons">{actionIds.map(id => <button key={id} className={['accept', 'next', 'rematch', 'flor'].includes(id) ? 'primary-button' : id === 'decline' ? 'decline-button' : 'call-button'} disabled={busy} onClick={() => action(id)}>{id === 'rematch' && <RotateCcw size={15}/>} {labels[id]}{id === 'next' && <ArrowRight size={15}/>}</button>)}{!actionIds.length && <span className="action-hint">{room.phase !== 'playing' ? 'El anfitrión da comienzo a la próxima.' : 'Los cantos disponibles van a aparecer acá.'}</span>}</div>{room.actions.includes('fold') && <button className="fold-button" disabled={busy} onClick={() => action('fold')}>Al mazo<ArrowUpRight size={14}/></button>}</div></>;
+    {!watching && <div className="action-bar"><div className="call-buttons">{actionIds.map(id => <button key={id} className={['accept', 'next', 'rematch', 'flor'].includes(id) ? 'primary-button' : id === 'decline' ? 'decline-button' : 'call-button'} disabled={busy} onClick={() => action(id)}>{id === 'rematch' && <RotateCcw size={15}/>} {labels[id]}{id === 'next' && <ArrowRight size={15}/>}</button>)}{!actionIds.length && <span className="action-hint">{room.phase !== 'playing' ? 'El anfitrión da comienzo a la próxima.' : 'Los cantos disponibles van a aparecer acá.'}</span>}</div>{room.actions.includes('fold') && <button className="fold-button" disabled={busy} onClick={() => action('fold')}>Al mazo<ArrowUpRight size={14}/></button>}</div>}</>;
 }
 function Modal({ title, onClose, children, wide = false, eyebrow = 'LAS REGLAS DE CASA' }) {
   const ref = useRef(null);

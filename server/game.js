@@ -6,7 +6,7 @@ const TRUCO = ['unused', 'unused', 'truco', 'retruco', 'cuatro'];
 export const teamOf = seat => seat % 2;
 const allConnected = room => room.players.length === room.capacity && room.players.every(p => p.connected);
 export function makeRoom(nickname, capacity, socketId) {
-  const room = { code: randomBytes(4).toString('hex').toUpperCase(), capacity, players: [], host: 0, phase: 'waiting', scores: [0, 0], roundNumber: 0, mano: capacity - 1, round: null, winner: null, log: [], events: [], eventSequence: 0, revision: 0, updated: Date.now() };
+  const room = { code: randomBytes(4).toString('hex').toUpperCase(), capacity, players: [], spectators: [], isPublic: true, host: 0, phase: 'waiting', scores: [0, 0], roundNumber: 0, mano: capacity - 1, round: null, winner: null, log: [], events: [], eventSequence: 0, revision: 0, createdAt: Date.now(), updated: Date.now() };
   const player = addPlayer(room, nickname, socketId);
   return { room, player };
 }
@@ -17,6 +17,18 @@ export function addPlayer(room, nickname, socketId) {
   room.players.push(player);
   note(room, `${nickname} se sentó a la mesa.`, 'join');
   return player;
+}
+export function addBot(room) {
+  const nickname = ['Bot Oriental', 'Bot del Mate', 'Bot Candombe'].find(name => !room.players.some(p => p.isBot && p.nickname === name)) || 'Bot Oriental';
+  const bot = addPlayer(room, nickname, null);
+  bot.isBot = true; bot.token = null;
+  return bot;
+}
+export function removeBot(room, seat) {
+  const bot = room.players.find(p => p.seat === seat && p.isBot);
+  if (room.phase !== 'waiting' || !bot) throw new Error('Solo se pueden quitar bots antes de repartir.');
+  room.players = room.players.filter(p => p !== bot);
+  note(room, 'Se liberó el lugar del bot.', 'join');
 }
 function note(room, message, type = 'info') {
   room.log.push({ id: randomUUID(), message, type });
@@ -203,20 +215,22 @@ export function act(room, seat, action, cardId) {
   note(room, `${name}: ¡${LABELS[action]}!`, 'call');
   announceCall(room, seat, action);
 }
-export function snapshot(room, seat) {
+export function snapshot(room, seat = null) {
   const r = room.round;
+  const player = room.players.find(p => p.seat === seat);
   return {
-    code: room.code, capacity: room.capacity, host: room.host, phase: room.phase, scores: room.scores,
+    code: room.code, capacity: room.capacity, host: room.host, phase: room.phase, scores: room.scores, isPublic: room.isPublic,
+    role: player ? 'player' : 'spectator', spectatorCount: room.spectators.length,
     mano: room.mano, roundNumber: room.roundNumber, winner: room.winner, revision: room.revision,
-    players: room.players.map(p => ({ seat: p.seat, nickname: p.nickname, connected: p.connected, count: r?.hands[p.seat]?.length ?? 0 })),
-    log: room.log, events: room.events, you: seat, actions: actionsFor(room, seat),
+    players: room.players.map(p => ({ seat: p.seat, nickname: p.nickname, connected: p.connected, isBot: Boolean(p.isBot), count: r?.hands[p.seat]?.length ?? 0 })),
+    log: room.log, events: room.events, you: player ? seat : null, actions: player ? actionsFor(room, seat) : [],
     round: r ? {
       sample: r.sample, turn: r.turn, table: r.table, current: r.current, lastTrick: r.lastTrick, tricks: r.tricks,
       truco: r.truco, pending: r.pending ? { kind: r.pending.kind, label: r.pending.label, team: r.pending.team, caller: r.pending.caller, points: r.pending.points ?? r.pending.target } : null,
       result: r.result, sideResults: r.sideResults, florDeclared: r.florDeclared,
       awaitingFlor: !r.florDone && holders(room).some(s => !r.florDeclared.includes(s)),
-      hand: r.hands[seat].map(c => ({ ...c, piece: piece(c, r.sample) })),
-      envido: envido(r.original[seat], r.sample), flor: flor(r.original[seat], r.sample)
+      hand: player ? r.hands[seat].map(c => ({ ...c, piece: piece(c, r.sample) })) : [],
+      envido: player ? envido(r.original[seat], r.sample) : null, flor: player ? flor(r.original[seat], r.sample) : null
     } : null
   };
 }

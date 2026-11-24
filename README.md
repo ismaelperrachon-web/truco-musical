@@ -13,15 +13,26 @@ npm run dev
 
 Abrí **http://localhost:5173**. Un solo proceso sirve React, la API y Socket.io. El frontend se actualiza automáticamente; los cambios del servidor reinician el proceso y sus salas.
 
-1. Ingresá tu apodo y creá una mesa **1 vs 1** o **2 vs 2**.
-2. Copiá el enlace o abrí la invitación en WhatsApp.
-3. Cada invitado entra desde su dispositivo con su apodo. También puede ingresar el código de ocho caracteres en la portada.
+1. Ingresá tu apodo. La sección **Online** muestra las personas conectadas y las mesas públicas en tiempo real.
+2. Para jugar solo, tocá **Jugar contra el bot**: se crea una práctica 1v1 y se reparten las cartas. Para jugar con amigos, tocá **Invitar** junto a una persona disponible o creá una mesa **1 vs 1** o **2 vs 2**.
+3. Tu amigo puede tocar **Aceptar y jugar** en la invitación de esta misma página, o **Entrar a jugar** en tu mesa online. No hace falta escribir un código. El enlace, WhatsApp y el código de ocho caracteres siguen funcionando como alternativas.
 4. Cuando estén todos conectados, el anfitrión reparte. En 2v2 los asientos 1 y 3 son compañeros; 2 y 4 forman el otro equipo. Los equipos se ven antes de empezar.
 5. Tocá una carta para jugar. Los botones muestran los cantos y respuestas válidos. El anfitrión inicia cada ronda y la revancha.
 
 **En celulares dentro de la misma Wi-Fi:** usá `http://IP-DE-LA-PC:5173`, por ejemplo `http://192.168.1.20:5173`. Abrí primero esa dirección en la computadora para que el enlace de invitación también lleve la IP. `localhost` siempre apunta al dispositivo desde el que se abre. Windows puede pedir habilitar Node en la red privada; no hace falta abrir puertos del router para jugar por Wi-Fi. Para jugar desde redes diferentes, desplegá el proyecto.
 
 Para probar dos jugadores en una computadora, abrí dos pestañas independientes e ingresá en ambas. **Recargar la misma pestaña recupera su asiento** mediante un token aleatorio en `sessionStorage`. Al perder conexión, se pausa la mesa hasta que vuelvan todos. El botón de salir concede la partida al equipo contrario si estaba en juego. Cerrar o recargar la pestaña solamente desconecta; no abandona.
+
+## Bot, personas online y espectadores
+
+- **Práctica rápida:** el botón del bot inicia un 1v1 sin esperar a otra persona. El bot juega y responde cantos en el servidor, con una estrategia de fuerza de cartas y tantos. Utiliza exclusivamente su propia vista de jugador y las cartas públicas, sin consultar manos rivales. Sus jugadas esperan a que se lean los carteles.
+- **Completar mesas:** antes de repartir, el anfitrión puede agregar o quitar bots en los lugares libres, también para armar un 2v2. Los bots están identificados con su ícono y no cuentan como personas conectadas. No se pueden sustituir jugadores ni quitar bots durante una partida.
+- **Personas conectadas:** los apodos aparecen al escribirlos y desaparecen al desconectarse. Podés buscar a tu amigo por apodo. No hay cuentas ni una lista persistente de amistades: la presencia corresponde a las sesiones abiertas.
+- **Invitar en un toque:** desde la portada, «Invitar» crea una mesa con la modalidad y visibilidad elegidas y envía una invitación dentro de la aplicación. Desde la espera se usa la mesa actual. La invitación dura un minuto; el ingreso valida que todavía quede lugar. Se limita la frecuencia de invitaciones.
+- **Públicas y privadas:** las mesas nuevas son públicas por defecto y se listan con apodos, lugares, tanteador y cantidad de espectadores. Desmarcá «Mesa pública» para ocultarla del directorio. En una mesa privada, tu apodo sigue mostrando «Mesa privada» pero no se publica su código. Podés compartir el enlace o enviar una invitación directamente. La privacidad es por enlace no listado; no hay contraseña.
+- **Mirar partidas:** en Online, tocá «Mirar partida» o «Ver mesa». El espectador ve el tanteador, la muestra, los cantos, sus resultados públicos y las cartas jugadas. No recibe manos sin jugar ni tantos privados y el servidor rechaza cualquier intento suyo de jugar o editar bots. Su entrada, salida o desconexión no pausa la partida ni cambia el turno.
+- **Del público a la mesa:** si todavía no se repartió y hay lugar, el espectador puede tocar «Sentarme a jugar». Si la mesa se completó mientras tanto, conserva su vista de espectador.
+- **Reconexión:** recargar conserva el rol de jugador o espectador en la misma pestaña. Si el único jugador humano se desconecta, los bots se pausan hasta que vuelve. Si el último humano abandona expresamente la mesa, se cierra también para los espectadores.
 
 Los efectos están habilitados y se desbloquean con la primera interacción, según las restricciones de audio del navegador. El parlante permite silenciarlos. Cada carta produce un roce y un golpe sintetizados sobre el paño; también hay efectos al repartir, cantar y resolver tantos.
 
@@ -82,6 +93,8 @@ npm run build
 
 Las pruebas cubren jerarquía, sustitución del rey, la flor de una pieza y dos del mismo palo en los cuatro palos, figuras comunes, pardas, turnos/cartas, pagos y cadenas de cantos, prioridad envido/truco, resultados y desempates, privacidad de las vistas, pausa por desconexión, reparto 2v2 y partidas completas simuladas. Las pruebas de integración abren servidores efímeros y clientes Socket.io reales para verificar creación, ingreso, rechazo de intrusos, reconexión y entrega del mismo resultado de contraflor a ambos jugadores. También se verifican la deduplicación de anuncios y la independencia de los canales de audio con un contexto simulado.
 
+Las pruebas de comunidad verifican bots autónomos, partidas completas de bots en 1v1 y 2v2, directorio público y presencia, ocultamiento de códigos privados, invitaciones y ocupación de asientos, restricciones de los espectadores, entrada/salida sin pausa y recuperación tras desconexiones.
+
 ## Estructura
 
 ```text
@@ -89,6 +102,8 @@ truco-musical/
 ├── src/
 │   ├── main.jsx            # Entrada React y estilos
 │   ├── App.jsx             # Portada, salas, mesa, tanteador y reglas
+│   ├── OnlineLobby.jsx     # Personas, mesas e invitaciones rápidas
+│   ├── community.css       # Directorio online y modo espectador
 │   ├── cards.jsx           # Cartas e íconos SVG musicales
 │   ├── sound.js            # Efectos con Web Audio
 │   ├── AudioControls.jsx   # Música y efectos con controles independientes
@@ -99,12 +114,15 @@ truco-musical/
 ├── server/
 │   ├── rules.js            # Funciones puras de reglas y barajado
 │   ├── game.js             # Motor autoritativo y vistas por jugador
+│   ├── bot.js              # Estrategia con información propia y pública
 │   ├── index.js            # Express, Socket.io y salas
 │   └── dev.js              # Servidor local con Vite integrado
 ├── test/
 │   ├── rules.test.js
 │   ├── game.test.js
 │   ├── network.test.js
+│   ├── bot.test.js
+│   ├── community.test.js
 │   ├── table-events.test.js
 │   └── sound.test.js
 ├── index.html
